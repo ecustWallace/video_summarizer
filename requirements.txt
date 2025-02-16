@@ -1,0 +1,6 @@
+tikapi
+fastapi
+google-genai
+google-cloud-bigquery
+python-dotenv
+tqdm
