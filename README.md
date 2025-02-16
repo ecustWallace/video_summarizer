@@ -71,38 +71,6 @@ python main.py --keyword "NBA" --minimal_video_number 40 --use_bq_cache
 4. **Store in BigQuery:** The descriptions are inserted into a BigQuery table.
 5. **Final Summary:** A final summary is generated using Gemini AI based on all stored descriptions.
 
-## Functions Breakdown
-
-### `main.py`
-
-- ``: Fetches video responses from TikAPI.
-- ``: Saves TikTok videos locally.
-- ``: Generates a description for a given video using Gemini AI.
-- ``: Creates a BigQuery table to store video summaries.
-- ``: Writes individual video descriptions to BigQuery.
-- ``: Generates a final summary from all stored descriptions.
-
-## Example Output
-
-```
-Getting response from tikapi...
-Take 5 queries to reach more than 40 videos.
-Processing Response 0: with 10 videos. Now downloading...
-Generating description of videos and insert to BQ...
-...
-Generating final summary of those videos.
-Final Summary: "The trending topics on TikTok under the keyword 'NBA' include recent game highlights, player performances, trade rumors, and fan reactions."
-```
-
-## Troubleshooting
-
-- **Issue:** Unable to connect to TikAPI
-  - Ensure your `TIKAPI_KEY` is correct and active.
-- **Issue:** BigQuery table creation fails
-  - Check that your GCP project and dataset exist.
-- **Issue:** Gemini AI API request fails
-  - Ensure your `GEMINI_KEY` is valid and your GCP billing is active.
-
 ## License
 
 This project is licensed under the MIT License.
