@@ -16,13 +16,12 @@ This project automates the process of fetching TikTok videos based on a given ke
 
 Before running the script, ensure you have the following:
 
-- Python 3.8+
 - A valid **TikAPI** key for fetching TikTok videos
 - A **Google Cloud Platform (GCP)** project with **BigQuery** enabled
 - A **Gemini AI** API key
-- A `.env` file containing the required credentials:
+- A `test.env` file containing the required credentials:
 
-### `.env` File
+### `test.env` File
 
 ```
 TIKAPI_KEY=your_tikapi_key
@@ -61,7 +60,7 @@ python main.py --keyword "NBA" --minimal_video_number 40 --use_bq_cache
 
 - `--keyword` (**required**): The keyword to fetch videos for.
 - `--minimal_video_number` (**optional**, default=40): The minimum number of videos to process.
-- `--use_bq_cache` (**optional**, flag): If set, reuses the existing BigQuery table instead of creating a new one.
+- (TODO) `--use_bq_cache` (**optional**, flag): If set, reuses the existing BigQuery table instead of creating a new one.
 
 ## Workflow
 
