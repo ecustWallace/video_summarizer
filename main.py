@@ -7,8 +7,15 @@ from tqdm import tqdm
 
 
 load_dotenv("test.env")
-PROMPT = "Summarize this video. "
-
+PROMPT = ("Summarize this video. I hope to know the following, but it depends on you to decide if those are applicable."
+          "1. Tell what are the objects in the video, the properties of them, and what's the relationship between them."
+          "2. Tell what events are happening in this video. "
+          "3. Tell what are the actions done in the video. "
+          "4. Tell what's the vibe under this video. "
+          "You don't need to satisfy all above, but just take a reference. No need to return result as a bullet, "
+          "but just directly return the summary value, without any word like okay sure. ")
+# TODO: Optimize this prompt, objects/property/relationship, events, actions, vibe/environment
+# TODO: In-context Learning
 
 def main():
     parser = argparse.ArgumentParser(description="Process keyword and cache usage.")
@@ -49,6 +56,8 @@ def main():
         table_id=args.keyword
     )
     print(result)
+    with open(f'{args.keyword}.txt', 'w') as f:
+        f.write(result)
 
 
 if __name__ == "__main__":

@@ -103,7 +103,7 @@ def final_summary(project_id, dataset_id, table_id, model="gemini-2.0-flash"):
     # Query GEMINI
     prompt_final_summary = ("All above are a series of descriptions from TikTok videos under keyword {}. "
                             "Please generate a summary for those, generally about what's the hot topics people "
-                            "are discussing under {}. ").format(table_id, table_id)
+                            "are discussing under {}. Please directly return the result, without any word like okay sure.").format(table_id, table_id)
     prompt = all_summary + prompt_final_summary
     client = genai.Client(api_key=os.environ["GEMINI_KEY"])
     response = client.models.generate_content(
