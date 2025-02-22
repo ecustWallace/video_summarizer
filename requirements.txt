@@ -1,6 +1,9 @@
 tikapi
 fastapi
+uvicorn
 google-genai
 google-cloud-bigquery
 python-dotenv
 tqdm
+Jinja2
+python-multipart

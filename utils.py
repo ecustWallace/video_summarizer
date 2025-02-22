@@ -86,28 +86,60 @@ def write_summary_to_bq(project_id, dataset_id, table_id, filename, summary):
 
 
 def final_summary(project_id, dataset_id, table_id, model="gemini-2.0-flash"):
-    client = bigquery.Client(project=project_id)
+    bq_client = bigquery.Client(project=project_id)
     
     query = f"""
         SELECT summary
         FROM `{project_id}.{dataset_id}.{table_id}`
     """
 
-    query_job = client.query(query)
+    query_job = bq_client.query(query)
     results = query_job.result()
 
     # Concatenate all summary together
-    all_summary = [row['summary'] for row in results] + ['']
-    all_summary = "------------\n".join(all_summary)
+    summary_ls = [row['summary'] for row in results]
+    summary_str = "------------\n".join(summary_ls+[''])
     
-    # Query GEMINI
-    prompt_final_summary = ("All above are a series of descriptions from TikTok videos under keyword {}. "
-                            "Please generate a summary for those, generally about what's the hot topics people "
-                            "are discussing under {}. Please directly return the result, without any word like okay sure.").format(table_id, table_id)
-    prompt = all_summary + prompt_final_summary
+    # Calculate tokens first to avoid exceeding upper limit
     client = genai.Client(api_key=os.environ["GEMINI_KEY"])
-    response = client.models.generate_content(
-        model="gemini-2.0-flash",
-        contents=[prompt]
+    response = client.models.count_tokens(
+        model=model,
+        contents=[summary_str],
     )
-    return response.text
+    token_number = response.total_tokens
+    
+    batch_num = token_number // 1048576 + 1
+    batch_size = max(1, int(len(summary_ls)//batch_num))
+    print(batch_num)
+    
+    summary_ls = []
+    
+    # Batch Processing each input
+    for batch_id in range(batch_num):
+        all_summary_batch = [row['summary'] for row in summary_ls[(batch_id*batch_size):(batch_id+1)*batch_size]]
+        all_summary_batch_str = '-----------------\n'.join(all_summary_batch + [''])
+        # Query GEMINI
+        prompt_final_summary = ("All above are a series of descriptions from TikTok videos under keyword {}. "
+                                "Please generate a summary for those, generally about what's the hot topics people "
+                                "are discussing under {}. Please directly return the result, without any word like okay sure.").format(table_id, table_id)
+        prompt = all_summary_batch_str + prompt_final_summary
+
+        # Send text to Gemini
+        response = client.models.generate_content(
+            model=model,
+            contents=[prompt]
+        )
+        summary_ls.append(response.text)
+        
+    if batch_num == 1:
+        return summary_ls[0]
+    else:
+        summary_ls = summary_ls + ['']
+        summary_all = "------------\n".join(summary_ls)
+        prompt_all_summary = ("All above are the summaries of different batches of TikTok videos. Please merge them together in a reasonable way. ")
+        prompt = summary_all + prompt_all_summary
+        response = client.models.generate_content(
+            model=model,
+            contents=[prompt]
+        )
+        return response.text
