@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Video Summarizer</title>
+</head>
+<body>
+    <h1>Enter Keyword to Summarize Videos</h1>
+    <form action="/" method="post">
+        <input type="text" name="keyword" placeholder="Enter keyword" required>
+        <button type="submit">Summarize</button>
+    </form>
+
+    {% if keyword %}
+        <h2>Summary for "{{ keyword }}"</h2>
+        <p>{{ summary }}</p>
+    {% endif %}
+</body>
+</html>
