@@ -30,6 +30,7 @@ def query_response_from_tikapi(keyword="NBA", video_number=100, query_upper_limi
 
 
 def download_video_from_response(response, directory="NBA"):
+    print(response.status_code)
     if directory:
         os.makedirs(directory, exist_ok=True)
     paths = []
@@ -38,10 +39,10 @@ def download_video_from_response(response, directory="NBA"):
         if 'playAddr' not in item and 'downloadAddr' not in item:
             # Not downloadable, skip
             continue
-        if 'playAddr' in item:
-            response.save_video(item['playAddr'], f"{directory}/{item['id']}.mp4")
-        elif 'downloadAddr' in item:
+        if 'downloadAddr' in item:
             response.save_video(item['downloadAddr'], f"{directory}/{item['id']}.mp4")
+        elif 'playAddr' in item:
+            response.save_video(item['playAddr'], f"{directory}/{item['id']}.mp4")
         paths.append(f"{directory}/{item['id']}.mp4")
     return paths
 
@@ -83,9 +84,9 @@ def write_summary_to_bq(project_id, dataset_id, table_id, filename, summary):
         {"filename": filename, "summary": summary}
     ]
     client.insert_rows_json(table_ref, rows_to_insert)
-
-
-def final_summary(project_id, dataset_id, table_id, model="gemini-2.0-flash"):
+    
+    
+def grab_summaries_from_bq(project_id, dataset_id, table_id):
     bq_client = bigquery.Client(project=project_id)
     
     query = f"""
@@ -97,11 +98,16 @@ def final_summary(project_id, dataset_id, table_id, model="gemini-2.0-flash"):
     results = query_job.result()
 
     # Concatenate all summary together
-    summary_ls = [row['summary'] for row in results]
-    summary_str = "------------\n".join(summary_ls+[''])
+    # summary_ls = [f'{idx+1}. ' + row['summary'] for idx, row in enumerate(results)]
+    summary_ls = [row['summary'] for idx, row in enumerate(results)]
+    return summary_ls
     
+
+
+def final_summary(summary_ls, table_id, model="gemini-2.0-flash"):
     # Calculate tokens first to avoid exceeding upper limit
     client = genai.Client(api_key=os.environ["GEMINI_KEY"])
+    summary_str = "\n------------\n".join(summary_ls+[''])
     response = client.models.count_tokens(
         model=model,
         contents=[summary_str],
@@ -110,18 +116,21 @@ def final_summary(project_id, dataset_id, table_id, model="gemini-2.0-flash"):
     
     batch_num = token_number // 1048576 + 1
     batch_size = max(1, int(len(summary_ls)//batch_num))
-    print(batch_num)
     
-    summary_ls = []
+    final_summary_ls = []
     
     # Batch Processing each input
     for batch_id in range(batch_num):
-        all_summary_batch = [row['summary'] for row in summary_ls[(batch_id*batch_size):(batch_id+1)*batch_size]]
-        all_summary_batch_str = '-----------------\n'.join(all_summary_batch + [''])
+        all_summary_batch = [row for row in summary_ls[(batch_id*batch_size):(batch_id+1)*batch_size]]
+        all_summary_batch_str = '\n-----------------\n'.join(all_summary_batch + [''])
         # Query GEMINI
         prompt_final_summary = ("All above are a series of descriptions from TikTok videos under keyword {}. "
                                 "Please generate a summary for those, generally about what's the hot topics people "
-                                "are discussing under {}. Please directly return the result, without any word like okay sure.").format(table_id, table_id)
+                                "are discussing under {}. Please directly return the result, without any word like okay sure."
+                                "Also, please tell me the reference of each sentence you generated. To be specific, "
+                                "my prompt is splitted by line splitter. You can simply gives me the index of the reference "
+                                "based on those line splitters. Also please change the line for each sentence. If you feel"
+                                "this sentence is general, simply put (ALL) afterwards instead of numbers. ").format(table_id, table_id)
         prompt = all_summary_batch_str + prompt_final_summary
 
         # Send text to Gemini
@@ -129,13 +138,13 @@ def final_summary(project_id, dataset_id, table_id, model="gemini-2.0-flash"):
             model=model,
             contents=[prompt]
         )
-        summary_ls.append(response.text)
+        final_summary_ls.append(response.text)
         
     if batch_num == 1:
-        return summary_ls[0]
+        return final_summary_ls[0]
     else:
-        summary_ls = summary_ls + ['']
-        summary_all = "------------\n".join(summary_ls)
+        final_summary_ls = final_summary_ls + ['']
+        summary_all = "\n------------\n".join(final_summary_ls)
         prompt_all_summary = ("All above are the summaries of different batches of TikTok videos. Please merge them together in a reasonable way. ")
         prompt = summary_all + prompt_all_summary
         response = client.models.generate_content(
