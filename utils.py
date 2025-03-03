@@ -121,16 +121,31 @@ def final_summary(summary_ls, table_id, model="gemini-2.0-flash"):
     
     # Batch Processing each input
     for batch_id in range(batch_num):
-        all_summary_batch = [row for row in summary_ls[(batch_id*batch_size):(batch_id+1)*batch_size]]
+        all_summary_batch = [f"{idx+1}. "+row.replace('#', '') for idx, row in enumerate(summary_ls[(batch_id*batch_size):(batch_id+1)*batch_size])]
         all_summary_batch_str = '\n-----------------\n'.join(all_summary_batch + [''])
         # Query GEMINI
-        prompt_final_summary = ("All above are a series of descriptions from TikTok videos under keyword {}. "
-                                "Please generate a summary for those, generally about what's the hot topics people "
-                                "are discussing under {}. Please directly return the result, without any word like okay sure."
-                                "Also, please tell me the reference of each sentence you generated. To be specific, "
-                                "my prompt is splitted by line splitter. You can simply gives me the index of the reference "
-                                "based on those line splitters. Also please change the line for each sentence. If you feel"
-                                "this sentence is general, simply put (ALL) afterwards instead of numbers. ").format(table_id, table_id)
+        # prompt_final_summary = ("All above are a series of descriptions from TikTok videos under keyword {}. "
+        #                         "Please generate a summary for those, generally about what's the hot topics people "
+        #                         "are discussing under {}. Please directly return the result, without any word like okay sure."
+        #                         "Also, please tell me the reference of each sentence you generated. To be specific, "
+        #                         "my prompt is splitted by line splitter. You can simply gives me the index of the reference "
+        #                         "based on those line splitters. Also please change the line for each sentence. If you feel"
+        #                         "this sentence is general, simply put (ALL) afterwards instead of numbers. ").format(table_id, table_id)
+        prompt_final_summary = ("You are an AI specialized in analyzing trending discussions from TikTok videos. Given multiple descriptions of videos under the keyword {}, your task is to:"
+                                "1. Generate a concise summary of the most discussed topics."
+                                "2. For each sentence in your summary, provide its reference index based on the original descriptions."
+                                "- The input descriptions are split by a line separator."
+                                "- If a sentence is general and applies to all input descriptions, mark it with (ALL)."
+                                "- Please put those reference after each sentence in summary. "
+                                "3. Explain why each reference was chosen or not chosen:"
+                                "- Justify why the selected references support the summary sentence."
+                                "- If some descriptions were excluded, explain why they were not relevant."
+                                "- Provide as much details as possible, and provide reasons for EACH video, if possible. "
+                                "4. Also please change the line for each sentence."
+                                "Return the result in the following JSON format: "
+                                "IMPORTANT: Please make sure the output is able to be parsed by json.loads. ").format(table_id)
+                                
+        prompt_final_summary += "{'summary': 'Your summaries in sentences. ', 'justification': 'Your justification contents. ', 'exclusion': 'Your exclusion contents. '}"
         prompt = all_summary_batch_str + prompt_final_summary
 
         # Send text to Gemini
@@ -141,7 +156,7 @@ def final_summary(summary_ls, table_id, model="gemini-2.0-flash"):
         final_summary_ls.append(response.text)
         
     if batch_num == 1:
-        return final_summary_ls[0]
+        return final_summary_ls[0], prompt
     else:
         final_summary_ls = final_summary_ls + ['']
         summary_all = "\n------------\n".join(final_summary_ls)
@@ -151,4 +166,4 @@ def final_summary(summary_ls, table_id, model="gemini-2.0-flash"):
             model=model,
             contents=[prompt]
         )
-        return response.text
+        return response.text, prompt

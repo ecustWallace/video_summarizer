@@ -74,7 +74,8 @@
       box-shadow: 0 2px 4px rgba(0,0,0,0.3);
     }
     form input,
-    form button {
+    form button,
+    form label {  /* Add label styling */
       width: 100%;
       padding: 0.75rem;
       margin-top: 0.75rem;
@@ -82,11 +83,32 @@
       border-radius: 6px;
       font-size: 1rem;
     }
-    form input {
+
+    form input[type="text"],
+    form input[type="number"] {
       background: #333;
       color: #fff;
       outline: none;
     }
+
+    form input[type="checkbox"] {
+      width: auto; /* Checkbox width */
+      margin-right: 0.5rem; /* Space between checkbox and label */
+      padding: 0;
+      margin-top: 0;
+      
+    }
+
+    form label {
+      display: flex;  /* Make label a flex container */
+      align-items: center; /* Vertically center the checkbox and text */
+      padding:0;
+      margin-top: 0.75rem;
+      color: #fff; /* White text for the label */
+      font-size: 1rem; /* Same font size as other form elements */
+    }
+
+
     form button {
       background: #ffcc00;
       color: #181818;
@@ -98,6 +120,10 @@
       background: #ffaa00;
     }
 
+    /* video-number-container styles*/
+    .video-number-container{
+        width: 100%;
+    }
     /* Progress & Summary Box */
     .progress-container {
       margin-top: 1rem;
@@ -215,32 +241,57 @@
       };
     }
 
-    function showFinalSummary(finalSummary) {
-      let summaryBox = document.getElementById("summary-box");
-      let finalSummaryDiv = document.getElementById("final-summary");
-      let sentenceSummariesDiv = document.getElementById("sentence-summaries");
-      let sentenceList = document.getElementById("sentence-summaries-content");
-      let evaluateBtn = document.getElementById("evaluate-btn");
+    function showFinalSummary(finalSummary, prompt, justification, exclusion) {
+        let summaryBox = document.getElementById("summary-box");
+        let finalSummaryDiv = document.getElementById("final-summary");
+        let sentenceSummariesDiv = document.getElementById("sentence-summaries");
+        let sentenceList = document.getElementById("sentence-summaries-content");
+        let evaluateBtn = document.getElementById("evaluate-btn");
+        let promptContentDiv = document.getElementById("prompt-content");
 
-      if (finalSummary.trim() !== "") {
-        finalSummaryDiv.innerHTML = marked.parse(finalSummary);
-        summaryBox.classList.remove("hidden");
+        let justificationBox = document.getElementById("justification-box");
+        let justificationContent = document.getElementById("justification-content");
 
-        // 显示 Evaluate 按钮
-        evaluateBtn.classList.remove("hidden");
+        let exclusionBox = document.getElementById("exclusion-box");
+        let exclusionContent = document.getElementById("exclusion-content");
 
-        // 显示每句话的 Summary
-        sentenceList.innerHTML = "";
-        allSummaries.forEach((s, idx) => {
-          let p = document.createElement("p");
-          p.textContent = `📝 Sentence ${idx + 1}: ${s}`;
-          sentenceList.appendChild(p);
-        });
-        sentenceSummariesDiv.classList.remove("hidden");
-      } else {
-        alert("⚠️ Error: Final summary is empty!");
-      }
+        if (finalSummary.trim() !== "") {
+            finalSummaryDiv.innerHTML = marked.parse(finalSummary);
+            summaryBox.classList.remove("hidden");
+            evaluateBtn.classList.remove("hidden");
+            // 显示每句话的 Summary
+            sentenceList.innerHTML = "";
+            allSummaries.forEach((s, idx) => {
+                let p = document.createElement("p");
+                p.textContent = `📝 Sentence ${idx + 1}: ${s}`;
+                sentenceList.appendChild(p);
+            });
+            sentenceSummariesDiv.classList.remove("hidden");
+
+            // 处理 Justification
+            if (justification && justification.trim() !== "") {
+                justificationContent.innerHTML = marked.parse(justification);
+                justificationBox.classList.remove("hidden");
+            }
+
+            // 处理 Exclusion
+            if (exclusion && exclusion.trim() !== "") {
+                exclusionContent.innerHTML = marked.parse(exclusion);
+                exclusionBox.classList.remove("hidden");
+            }
+
+            // 处理 Prompt to LLM 内容
+            if (prompt && prompt.trim() !== "") {
+                promptContentDiv.innerHTML = marked.parse(prompt);
+            } else {
+                promptContentDiv.innerHTML = "<p>No prompt available.</p>";
+            }
+
+        } else {
+            alert("⚠️ Error: Final summary is empty!");
+        }
     }
+
 
     function toggleSentences() {
       let sentencesDiv = document.getElementById("sentence-summaries-content");
@@ -310,7 +361,42 @@
       analysisDiv.classList.toggle("hidden");
     }
 
-    connectWebSocket();
+    function toggleVideoNumber() {
+        const skipDownloadCheckbox = document.getElementById("skip-download");
+        const videoNumberContainer = document.querySelector(".video-number-container");
+        const videoNumberInput = document.getElementById("video_number");
+
+        if (skipDownloadCheckbox.checked) {
+            videoNumberContainer.classList.add("hidden");
+            videoNumberInput.required = false;
+            videoNumberInput.disabled = true; // Disable the input
+        } else {
+            videoNumberContainer.classList.remove("hidden");
+            videoNumberInput.required = true;
+            videoNumberInput.disabled = false; // Re-enable the input
+        }
+    }
+    function togglePrompt() {
+      let promptDiv = document.getElementById("prompt-content");
+      promptDiv.classList.toggle("hidden");
+    }
+      
+    document.addEventListener("DOMContentLoaded", function() {
+        connectWebSocket();
+        toggleVideoNumber(); // Call on page load to set initial state
+
+        const skipDownloadCheckbox = document.getElementById("skip-download");
+        skipDownloadCheckbox.addEventListener("change", toggleVideoNumber);
+      });
+    function toggleJustification() {
+        let justificationDiv = document.getElementById("justification-content");
+        justificationDiv.classList.toggle("hidden");
+    }
+
+    function toggleExclusion() {
+        let exclusionDiv = document.getElementById("exclusion-content");
+        exclusionDiv.classList.toggle("hidden");
+    }
   </script>
 </head>
 <body>
@@ -326,7 +412,13 @@
       <!-- 表单 -->
       <form action="/" method="post">
         <input type="text" name="keyword" placeholder="Enter keyword" required />
-        <input type="number" name="video_number" placeholder="Number of videos" required min="1"/>
+        <div class="video-number-container">
+            <input type="number" name="video_number" id="video_number" placeholder="Number of videos" required/>
+        </div>
+        <label for="skip-download">
+          <input type="checkbox" id="skip-download" name="skip_download" />
+          Skip downloading videos
+        </label>
         <button type="submit">Start Analysis</button>
       </form>
 
@@ -343,7 +435,23 @@
           <h2>📜 Final Summary</h2>
           <div id="final-summary" class="markdown-content"></div>
         </div>
+        <!-- Justification (可折叠) -->
+        <div id="justification-box" class="summary-box hidden">
+          <div class="foldable" onclick="toggleJustification()">📑 Justification (Click to expand)</div>
+          <div id="justification-content" class="hidden markdown-content"></div>
+        </div>
 
+        <!-- Exclusion (可折叠) -->
+        <div id="exclusion-box" class="summary-box hidden">
+          <div class="foldable" onclick="toggleExclusion()">🚫 Exclusion (Click to expand)</div>
+          <div id="exclusion-content" class="hidden markdown-content"></div>
+        </div>
+
+        <!-- Prompt to LLM (折叠框) -->
+        <div id="prompt-box" class="summary-box">
+          <div class="foldable" onclick="togglePrompt()">📜 Prompt to LLM (Click to expand)</div>
+          <div id="prompt-content" class="hidden markdown-content"></div>
+        </div>
         <!-- 句子级摘要（可折叠） -->
         <div id="sentence-summaries" class="summary-box hidden">
           <div class="foldable" onclick="toggleSentences()">📄 Sentence Summaries (Click to expand)</div>
@@ -358,7 +466,7 @@
 
         <!-- 调用显示函数 -->
         <script>
-          showFinalSummary(`{{ summary | safe }}`);
+          showFinalSummary(`{{ summary | safe }}`, `{{ prompt | safe }}`, `{{ justification | safe }}`, `{{ exclusion | safe }}`);
         </script>
       {% endif %}
     </div>
