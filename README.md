@@ -14,6 +14,7 @@ This project automates the process of fetching TikTok videos based on a given ke
 - 🖥 **Web UI with Markdown rendering**
 - 🚀 **Real-time progress updates** using WebSockets
 - ☁️ **Deployable on Google Cloud Run**
+- ✅ **Provide Grounding and evaluate summary accuracy using structured precision and recall metrics**
 
 ---
 
@@ -142,8 +143,8 @@ Once deployed, **Google Cloud Run** will provide a **public URL** for the web ap
 4️⃣ **Store in BigQuery** – Inserts descriptions into BigQuery for future analysis.\
 5️⃣ **Summarize Key Topics** – Uses **Gemini AI** to generate a final summary.\
 6️⃣ **Delete Processed Videos** – Deletes each video after processing to optimize storage.\
-7️⃣ **Display Final Summary** – Renders the final analysis as Markdown in the Web UI.
-
+7️⃣ **Evaluate summary accuracy** - Tell how good the final summary is. \
+8️⃣ **Display Final Summary** – Renders the final analysis as Markdown in the Web UI.
 ---
 
 ## Screenshots
