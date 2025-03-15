@@ -1,0 +1,176 @@
+<script>
+  let allSummaries = {{ summaries | tojson | safe }};
+
+  function connectWebSocket() {
+    let socket = new WebSocket("wss://" + window.location.host + "/progress");
+    socket.onmessage = function(event) {
+      let progressDiv = document.getElementById("progress");
+      let message = document.createElement("p");
+      message.textContent = event.data;
+      progressDiv.appendChild(message);
+      progressDiv.scrollTop = progressDiv.scrollHeight;
+    };
+    socket.onclose = function() {
+      console.log("WebSocket closed. Reconnecting in 5 seconds...");
+      setTimeout(connectWebSocket, 5000);
+    };
+  }
+
+  function showFinalSummary(finalSummary, prompt, justification, exclusion) {
+    let summaryBox = document.getElementById("summary-box");
+    let finalSummaryDiv = document.getElementById("final-summary");
+    let sentenceSummariesDiv = document.getElementById("sentence-summaries");
+    let sentenceList = document.getElementById("sentence-summaries-content");
+    let evaluateBtn = document.getElementById("evaluate-btn");
+    let promptContentDiv = document.getElementById("prompt-content");
+
+    let justificationBox = document.getElementById("justification-box");
+    let justificationContent = document.getElementById("justification-content");
+
+    let exclusionBox = document.getElementById("exclusion-box");
+    let exclusionContent = document.getElementById("exclusion-content");
+
+    if (finalSummary.trim() !== "") {
+      finalSummaryDiv.innerHTML = marked.parse(finalSummary);
+      summaryBox.classList.remove("hidden");
+      evaluateBtn.classList.remove("hidden");
+      // 显示每句话的 Summary
+      sentenceList.innerHTML = "";
+      allSummaries.forEach((s, idx) => {
+        let p = document.createElement("p");
+        p.textContent = `📝 Sentence ${idx + 1}: ${s}`;
+        sentenceList.appendChild(p);
+      });
+      sentenceSummariesDiv.classList.remove("hidden");
+
+      // 处理 Justification
+      if (justification && justification.trim() !== "") {
+        justificationContent.innerHTML = marked.parse(justification);
+        justificationBox.classList.remove("hidden");
+      }
+
+      // 处理 Exclusion
+      if (exclusion && exclusion.trim() !== "") {
+        exclusionContent.innerHTML = marked.parse(exclusion);
+        exclusionBox.classList.remove("hidden");
+      }
+
+      // 处理 Prompt to LLM 内容
+      if (prompt && prompt.trim() !== "") {
+        promptContentDiv.innerHTML = marked.parse(prompt);
+      } else {
+        promptContentDiv.innerHTML = "<p>No prompt available.</p>";
+      }
+
+    } else {
+      alert("⚠️ Error: Final summary is empty!");
+    }
+  }
+
+  function toggleSentences() {
+    let sentencesDiv = document.getElementById("sentence-summaries-content");
+    sentencesDiv.classList.toggle("hidden");
+  }
+
+  function evaluateSummary() {
+    let finalSummary = document.getElementById("final-summary").textContent;
+    console.log("📡 Sending evaluation request...");
+    console.log("Final Summary:", finalSummary);
+    console.log("All Summaries:", allSummaries);
+
+    fetch("/evaluate_summary", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ summary: finalSummary, small_summaries: allSummaries })
+    })
+    .then(response => response.json())
+    .then(data => {
+      console.log("✅ Evaluation Response:", data);
+      let evaluationBox = document.getElementById("evaluation-box");
+
+      // Missing sentences block
+      let missingHTML = `
+        <h2>🔍 Evaluation Results</h2>
+        <p><strong>Missing Sentences:</strong> ${
+          data.missing_sentences && data.missing_sentences.length > 0
+            ? "❌ Yes"
+            : "✅ No missing content"
+        }</p>
+      `;
+      if (data.missing_sentences && data.missing_sentences.length > 0) {
+        data.missing_sentences.forEach(ms => {
+          missingHTML += `<p>📝 ${ms.text} (Source: ${ms.source.join(", ")})</p>`;
+        });
+      }
+
+      // Sentence-level analysis
+      let detailHTML = `
+        <h3 class="foldable" onclick="toggleDetails()">⚡ Sentence Analysis (Click to expand)</h3>
+        <div id="detailed-analysis" class="hidden">
+      `;
+      if (data.precision_recall && data.precision_recall.length > 0) {
+        detailHTML += data.precision_recall.map((item, index) => `
+          <div class="evaluation-result">
+            <p><strong>Sentence ${index + 1}:</strong> ${item.text}</p>
+            <p>Precision: <strong>${(item.precision * 100).toFixed(2)}%</strong></p>
+            <p>Recall: <strong>${(item.recall * 100).toFixed(2)}%</strong></p>
+            ${
+              item.errors && item.errors.length > 0
+                ? `<p style="color:red;">❌ Errors: ${item.errors.join(", ")}</p>`
+                : `<p>✅ No errors</p>`
+            }
+          </div>
+        `).join("");
+      }
+      detailHTML += "</div>";
+
+      evaluationBox.innerHTML = missingHTML + detailHTML;
+      evaluationBox.classList.remove("hidden");
+    })
+    .catch(error => console.error("❌ Evaluation Error:", error));
+  }
+
+  function toggleDetails() {
+    let analysisDiv = document.getElementById("detailed-analysis");
+    analysisDiv.classList.toggle("hidden");
+  }
+
+  function toggleVideoNumber() {
+    const skipDownloadCheckbox = document.getElementById("skip-download");
+    const videoNumberContainer = document.querySelector(".video-number-container");
+    const videoNumberInput = document.getElementById("video_number");
+
+    if (skipDownloadCheckbox.checked) {
+      videoNumberContainer.classList.add("hidden");
+      videoNumberInput.required = false;
+      videoNumberInput.disabled = true; // Disable the input
+    } else {
+      videoNumberContainer.classList.remove("hidden");
+      videoNumberInput.required = true;
+      videoNumberInput.disabled = false; // Re-enable the input
+    }
+  }
+
+  function togglePrompt() {
+    let promptDiv = document.getElementById("prompt-content");
+    promptDiv.classList.toggle("hidden");
+  }
+
+  document.addEventListener("DOMContentLoaded", function() {
+    connectWebSocket();
+    toggleVideoNumber(); // Call on page load to set initial state
+
+    const skipDownloadCheckbox = document.getElementById("skip-download");
+    skipDownloadCheckbox.addEventListener("change", toggleVideoNumber);
+  });
+
+  function toggleJustification() {
+    let justificationDiv = document.getElementById("justification-content");
+    justificationDiv.classList.toggle("hidden");
+  }
+
+  function toggleExclusion() {
+    let exclusionDiv = document.getElementById("exclusion-content");
+    exclusionDiv.classList.toggle("hidden");
+  }
+</script>

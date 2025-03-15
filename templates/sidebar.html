@@ -1,0 +1,19 @@
+<!-- 侧边栏 -->
+<div class="sidebar">
+  <!-- 表单 -->
+  <form action="/" method="post">
+    <input type="text" name="keyword" placeholder="Enter keyword" required />
+    <div class="video-number-container">
+      <input type="number" name="video_number" id="video_number" placeholder="Number of videos" required/>
+    </div>
+    <label for="skip-download">
+      <input type="checkbox" id="skip-download" name="skip_download" />
+      Skip downloading videos
+    </label>
+    <button type="submit">Start Analysis</button>
+  </form>
+
+  <!-- 进度 -->
+  <h2 style="margin-top:1.5rem; color:#ffcc00;">📊 Analysis Progress</h2>
+  <div id="progress" class="progress-container"></div>
+</div>

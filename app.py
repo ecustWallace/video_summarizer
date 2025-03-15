@@ -9,6 +9,7 @@ from tqdm import tqdm
 from jinja2 import Environment, FileSystemLoader
 import asyncio
 from google import genai
+import json
 
 # Load environment variables
 load_dotenv("test.env")  # Or the appropriate path to your .env file
@@ -144,8 +145,9 @@ def generate_prompt(summary, small_summaries):
 @app.post("/evaluate_summary")
 async def evaluate_summary(data: EvaluationRequest):
     """
-    调用大模型来评估最终摘要质量
+    Call LLM to evaluate the quality of summaries
     """
+    await send_progress("📊 Generating the evaluation of summaries...")
     prompt = generate_prompt(data.summary, data.small_summaries)
 
     client = genai.Client(api_key=os.environ["GEMINI_KEY"])
@@ -154,7 +156,6 @@ async def evaluate_summary(data: EvaluationRequest):
         contents=[prompt]
     )
     evaluation_result = response.text.strip("```json").strip("```")
-    print(evaluation_result)
     try:
         import json
         evaluation_json = json.loads(evaluation_result)
@@ -163,6 +164,20 @@ async def evaluate_summary(data: EvaluationRequest):
     except json.JSONDecodeError:
         print("error")
         return {"error": "Failed to parse model response"}
+
+  
+def process_summaries_from_bq(keyword):
+    """Extract Summaries from BigQuery and get the final summary"""
+    summaries = grab_summaries_from_bq(
+        project_id=os.environ["GCP_PROJECT_ID"],
+        dataset_id=os.environ["BQ_DATASET_ID"],
+        table_id=keyword
+    )
+    if not summaries:
+        raise HTTPException(status_code=404, detail=f"No summaries found for keyword: {keyword}")
+    summaries = [summary.replace('\n', '') for summary in summaries]
+    result, prompt = final_summary(summaries, table_id=keyword)
+    return result, summaries, prompt
 
 
 @app.post("/", response_class=HTMLResponse)
@@ -173,72 +188,32 @@ async def summarize_videos(
     skip_download: bool = Form(False)
 ):
     """Process video summarization, handling skip_download and empty video_number."""
-    import json
     if skip_download:
-        # Your existing BigQuery logic.  This is correct.
         await send_progress("✅ Skipping download, retrieving past summaries from BigQuery...")
-        await send_progress("📊 Generating the final summary...")
-        summaries = grab_summaries_from_bq(
-            project_id=os.environ["GCP_PROJECT_ID"],
-            dataset_id=os.environ["BQ_DATASET_ID"],
-            table_id=keyword
-        )
-        if not summaries:
-            raise HTTPException(status_code=404, detail=f"No summaries found for keyword: {keyword}")
-        summaries = [summary.replace('\n', '') for summary in summaries]
-        result, prompt = final_summary(summaries, table_id=keyword)
-        print(result)
-        result = result.strip("```json").strip("```")
-        result_json = json.loads(result)
-        template = templates.get_template("index.html")
-        return HTMLResponse(content=template.render(
-            summary=result_json['summary'], 
-            summaries=summaries, 
-            keyword=keyword,
-            prompt=prompt.replace('*', '').replace('#', ''),  # 传递 prompt
-            justification=result_json['justification'],
-            exclusion=result_json['exclusion']
-        ), status_code=200)
-
-    else:  # IMPORTANT:  The else block is crucial.
-        if video_number is None:
-            raise HTTPException(status_code=400, detail="video_number is required when skip_download is false")
-        # Rest of your video download and processing logic (the code you had *before*)
+    elif video_number is None:
+        raise HTTPException(status_code=400, detail="video_number is required when skip_download is false")
+    else:
         try:
-            # 1️⃣ Notify the frontend that analysis has started
             await send_progress(f"🔍 Fetching up to {video_number} videos from TikAPI...")
-
-            # 2️⃣ Query TikAPI for videos
             response_ls = query_response_from_tikapi(keyword=keyword, video_number=video_number)
-            total_queries = len(response_ls)  # Count the total number of queries
+            total_queries = len(response_ls)
             await send_progress(f"📊 Total TikAPI queries made: {total_queries}")
-
-            # 3️⃣ Ensure that the BigQuery table exists
+            
             create_bigquery_table(table_id=keyword)
-
-            # 4️⃣ Process videos, ensuring we do not exceed `video_number`
-            total_processed_videos = 0  # Track processed videos
+            total_processed_videos = 0
             download_success = True
 
             for idx, response in enumerate(response_ls):
                 if total_processed_videos >= video_number:
-                    break  # Stop processing if required number is reached
-
+                    break
                 await send_progress(f"📥 Downloading batch {idx+1}...")
                 try:
-                    # Download videos from the current response batch
                     paths = download_video_from_response(response, directory=keyword)
-
-                    # Only process the required number of videos
-                    for path in tqdm(paths, desc="Processing videos..."):
+                    for path in paths:
                         if total_processed_videos >= video_number:
-                            break  # Stop processing further videos
-
+                            break
                         await send_progress(f"📝 Analyzing video {total_processed_videos + 1}/{video_number}...")
-
                         summary = describe_video(path, PROMPT)
-
-                        # Write summary to BigQuery
                         write_summary_to_bq(
                             project_id=os.environ["GCP_PROJECT_ID"],
                             dataset_id=os.environ["BQ_DATASET_ID"],
@@ -246,40 +221,32 @@ async def summarize_videos(
                             filename=path,
                             summary=summary
                         )
-                        total_processed_videos += 1  # Increment the count
-
+                        total_processed_videos += 1
                     if total_processed_videos >= video_number:
-                        break  # Stop further API queries
-
-                except Exception as e: # More specific exception handling is preferred
+                        break
+                except Exception as e:
                     await send_progress(f"❌ Error during download: {e}")
                     download_success = False
-                    break # Exit download loop on error
+                    break
 
-            #If download is not successful, use summaries in bigquery
             if not download_success:
                 await send_progress("✅ TikAPI download failed, retrieving past summaries from BigQuery...")
-            # 生成 summaries 和最终 summary
-            summaries = grab_summaries_from_bq(
-                project_id=os.environ["GCP_PROJECT_ID"],
-                dataset_id=os.environ["BQ_DATASET_ID"],
-                table_id=keyword
-            )
-            if not summaries:
-                return HTMLResponse(content=f"<h2>No summaries found for keyword: {keyword}</h2>", status_code=404)
-            # 生成最终摘要
-            await send_progress("📊 Generating the final summary...")
-            result, prompt = final_summary(summaries, table_id=keyword)
-
-            # 渲染 HTML，传递 `result`（最终总结）和 `summaries`（各个视频摘要）
-            template = templates.get_template("index.html")
-            return HTMLResponse(content=template.render(
-                summary=result, 
-                summaries=summaries, 
-                keyword=keyword, 
-                prompt=prompt.replace('*', '').replace('#', '') # 传递 prompt
-            ), status_code=200)
-
 
         except Exception as e:
             return HTMLResponse(content=f"<h2>Error: {str(e)}</h2>", status_code=500)
+
+    try:        
+        await send_progress("📊 Generating the final summary...")
+        result, summaries, prompt = process_summaries_from_bq(keyword)
+        result = result.strip("```json").strip("```")
+        template = templates.get_template("index.html")
+        return HTMLResponse(content=template.render(
+            summary=result,
+            summaries=summaries,
+            keyword=keyword,
+            prompt=prompt.replace('*', '').replace('#', ''),
+            justification=json.loads(result).get('justification', ''),
+            exclusion=json.loads(result).get('exclusion', '')
+        ), status_code=200)
+    except Exception as e:
+        return HTMLResponse(content=f"<h2>Error: {str(e)}</h2>", status_code=500)

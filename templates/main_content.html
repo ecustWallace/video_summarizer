@@ -1,0 +1,43 @@
+<!-- 主区域 -->
+<div class="main-content">
+  {% if keyword %}
+    <!-- 最终摘要 -->
+    <div id="summary-box" class="summary-box hidden">
+      <h2>📜 Final Summary</h2>
+      <div id="final-summary" class="markdown-content"></div>
+    </div>
+    <!-- Justification (可折叠) -->
+    <div id="justification-box" class="summary-box hidden">
+      <div class="foldable" onclick="toggleJustification()">📑 Justification (Click to expand)</div>
+      <div id="justification-content" class="hidden markdown-content"></div>
+    </div>
+
+    <!-- Exclusion (可折叠) -->
+    <div id="exclusion-box" class="summary-box hidden">
+      <div class="foldable" onclick="toggleExclusion()">🚫 Exclusion (Click to expand)</div>
+      <div id="exclusion-content" class="hidden markdown-content"></div>
+    </div>
+
+    <!-- Prompt to LLM (折叠框) -->
+    <div id="prompt-box" class="summary-box">
+      <div class="foldable" onclick="togglePrompt()">📜 Prompt to LLM (Click to expand)</div>
+      <div id="prompt-content" class="hidden markdown-content"></div>
+    </div>
+    <!-- 句子级摘要（可折叠） -->
+    <div id="sentence-summaries" class="summary-box hidden">
+      <div class="foldable" onclick="toggleSentences()">📄 Sentence Summaries (Click to expand)</div>
+      <div id="sentence-summaries-content" class="hidden sentence-list"></div>
+    </div>
+
+    <!-- Evaluate 按钮 -->
+    <button id="evaluate-btn" class="hidden" onclick="evaluateSummary()">🔍 Evaluate Summary</button>
+
+    <!-- 评估结果 -->
+    <div id="evaluation-box" class="evaluation-box hidden"></div>
+
+    <!-- 调用显示函数 -->
+    <script>
+      showFinalSummary(`{{ summary | safe }}`, `{{ prompt | safe }}`, `{{ justification | safe }}`, `{{ exclusion | safe }}`);
+    </script>
+  {% endif %}
+</div>
