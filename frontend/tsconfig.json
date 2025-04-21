@@ -1,0 +1,36 @@
+{
+  // REMOVED the "extends": "./tsconfig.json" line
+
+  "compilerOptions": {
+    /* Base Options: */
+    "esModuleInterop": true, // Fixes TS1259 (React import)
+    "skipLibCheck": true,    // Speeds up compilation by skipping d.ts checks in node_modules
+    "target": "ES2020",      // Fixes TS18028 (private identifiers #), use ES2015+
+    "allowJs": true,         // Allow JavaScript files to be compiled
+    "resolveJsonModule": true, // Allow importing JSON files
+    "isolatedModules": true,  // Required by some bundlers (like Vite), ensures files are self-contained modules.
+    "noEmit": true,          // IMPORTANT: Assumes you use a bundler (like Vite, Webpack, Parcel) to handle the actual JS/CSS output. TypeScript only performs type checking. If you ARE using `tsc` to emit JS directly, remove this line.
+
+    /* Strictness */
+    "strict": true,            // Enable all strict type-checking options (recommended)
+    "noUnusedLocals": true,    // Report errors on unused local variables
+    "noUnusedParameters": true, // Report errors on unused parameters
+    "noFallthroughCasesInSwitch": true, // Report errors for fallthrough cases in switch statements
+
+    /* Module Resolution */
+    "module": "ESNext",          // Use modern ES module syntax
+    "moduleResolution": "bundler", // Fixes TS2307 (react-router/dom). 'node16' or 'nodenext' are alternatives. 'bundler' is often best for modern tools.
+    "baseUrl": ".",              // Base directory for non-relative module paths
+    "paths": {                   // Path aliases
+      "@/*": ["src/*"]
+    },
+
+    /* JSX */
+    "jsx": "react-jsx",         // Fixes TS2503 (Cannot find namespace 'JSX'). Use React 17+ JSX transform.
+
+    /* Libs */
+    "lib": ["DOM", "DOM.Iterable", "ESNext"] // Include standard browser DOM APIs and modern JS features
+  },
+  "include": ["src"],            // Which folders/files to include in compilation
+  "exclude": ["node_modules"]   // Explicitly exclude node_modules (though often default)
+}

@@ -1,0 +1,135 @@
+# router/task.py
+from fastapi import APIRouter, Query, HTTPException, BackgroundTasks
+from pydantic import BaseModel
+from sqlalchemy import text, exc # Import exc for exception handling
+from database import engine
+import logging # Optional: Add logging for better debugging
+from .summarize import summarize_videos
+
+router = APIRouter()
+logger = logging.getLogger(__name__) # Optional: Logger setup
+
+# --- Model for creating a task ---
+class TaskCreateRequest(BaseModel):
+    email: str
+    keyword: str
+    number: int # This is the number of videos specified during creation
+    skip_download: bool
+
+# --- Model for the object returned by GET /api/tasks ---
+# Define this explicitly for clarity and potential reuse
+class TaskInfo(BaseModel):
+    id: int
+    keyword: str
+    video_number: int # Let's call it video_number consistently in the response
+    
+
+# --- Endpoint to create a new task ---
+@router.post("/api/tasks/create", status_code=201) # Use 201 Created status code
+async def create_task(task: TaskCreateRequest, background_tasks: BackgroundTasks):
+    """Creates a new task in the database."""
+    insert_query = text("""
+        INSERT INTO test (user_email, keyword, number)
+        VALUES (:email, :keyword, :number)
+        RETURNING id, keyword, number, user_email
+    """) # Also return user_email if needed later, though not strictly required by the response model
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(
+                insert_query,
+                {
+                    "email": task.email,
+                    "keyword": task.keyword,
+                    "number": task.number
+                }
+            )
+            conn.commit() # Commit the transaction
+            new_task_row = result.fetchone()
+            if new_task_row is None:
+                raise HTTPException(status_code=500, detail="Failed to create task.")
+                
+            # --- Schedule the summarize_videos function ---
+            # Pass necessary arguments to your summarize_videos function.
+            # Make sure summarize_videos accepts these arguments.
+            background_tasks.add_task(
+                summarize_videos,
+                task_id=new_task_row.id,          # Pass the newly created task ID
+                user_email=task.email, # Or task.email, depending on what summarize needs
+                keyword=task.keyword,      # Or task.keyword
+                video_number=task.number,  # Or task.number
+                skip_download=task.skip_download # Pass skip_download if summarize needs it
+                # Add any other arguments your summarize_videos function requires
+            )
+
+            # Map database columns to the conceptual TaskInfo model
+            return {
+                "task": TaskInfo(
+                    id=new_task_row.id,
+                    keyword=task.keyword,
+                    video_number=task.number # Map db 'number' to 'video_number'
+                )
+            }
+    except exc.SQLAlchemyError as e:
+        logger.error(f"Database error creating task: {e}", exc_info=True) # Log the error
+        raise HTTPException(status_code=500, detail="Database error occurred.")
+    except Exception as e:
+        logger.error(f"Unexpected error creating task: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="An unexpected error occurred.")
+
+
+# --- Endpoint to get tasks for a user ---
+@router.get("/api/tasks", response_model=dict[str, list[TaskInfo]]) # Use response_model for validation/docs
+async def get_tasks(email: str = Query(..., description="Email of the user whose tasks to retrieve")):
+    """Retrieves a list of tasks for the specified user."""
+    select_query = text("""
+        SELECT id, keyword, number -- Select the 'number' column from DB
+        FROM test
+        WHERE user_email = :email
+        ORDER BY created_at DESC
+    """)
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(select_query, {"email": email})
+            # Map database rows to TaskInfo model
+            tasks = [
+                TaskInfo(id=row.id, keyword=row.keyword, video_number=row.number)
+                for row in result
+            ]
+        return {"tasks": tasks}
+    except exc.SQLAlchemyError as e:
+        logger.error(f"Database error fetching tasks for {email}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Database error occurred.")
+    except Exception as e:
+        logger.error(f"Unexpected error fetching tasks: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="An unexpected error occurred.")
+
+# --- Endpoint to delete a task ---
+@router.delete("/api/tasks/delete/{task_id}", status_code=204) # Use 204 No Content for successful deletion
+async def delete_task(task_id: int):
+    """Deletes a task by its ID."""
+    delete_query = text("DELETE FROM test WHERE id = :task_id RETURNING id") # RETURNING helps confirm deletion
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(delete_query, {"task_id": task_id})
+            conn.commit()
+            if result.fetchone() is None:
+                 # Optional: Return 404 if the task didn't exist
+                 raise HTTPException(status_code=404, detail=f"Task {task_id} not found.")
+            # No need to return a message body for 204
+            return None
+    except exc.SQLAlchemyError as e:
+        logger.error(f"Database error deleting task {task_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Database error occurred.")
+    except Exception as e:
+        logger.error(f"Unexpected error deleting task {task_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="An unexpected error occurred.")
+
+# Note: The /api/tasks/summarize endpoint and its dependencies
+# (SummaryRequest model, etc.) are assumed to be in a different file
+# (like your original 'summarize.py' or similar) and remain unchanged.
+# Make sure the SummaryRequest model in that file still expects:
+# keyword: str
+# video_number: int | None = None
+# skip_download: bool = False
+# email: str
+# task_id: int

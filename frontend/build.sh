@@ -1,0 +1,1 @@
+gcloud run deploy frontend   --source .   --allow-unauthenticated   --region us-central1
