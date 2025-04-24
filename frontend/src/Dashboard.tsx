@@ -141,7 +141,7 @@ export default function Dashboard() {
           <TaskPanel task={selectedTask} onBack={() => setSelectedTask(null)} />
         ) : (
           <div className="text-center">
-            <h1 className="text-5xl font-extrabold bg-gradient-to-r text-transparent bg-clip-text">
+            <h1 className="text-5xl font-bold text-gray-100">
               Hello, {email?.split("@")[0]} 👋
             </h1>
             <p className="text-xl text-gray-300 leading-loose">Welcome to your personalized dashboard. Ready to create something awesome?</p>

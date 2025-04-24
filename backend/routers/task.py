@@ -22,7 +22,9 @@ class TaskInfo(BaseModel):
     id: int
     keyword: str
     video_number: int # Let's call it video_number consistently in the response
-    
+    status: str
+    summary: str | None = None
+    created_at: str | None = None
 
 # --- Endpoint to create a new task ---
 @router.post("/api/tasks/create", status_code=201) # Use 201 Created status code
@@ -31,7 +33,7 @@ async def create_task(task: TaskCreateRequest, background_tasks: BackgroundTasks
     insert_query = text("""
         INSERT INTO test (user_email, keyword, number)
         VALUES (:email, :keyword, :number)
-        RETURNING id, keyword, number, user_email
+        RETURNING id, keyword, number, user_email, status, summary, created_at
     """) # Also return user_email if needed later, though not strictly required by the response model
     try:
         with engine.connect() as conn:
@@ -66,7 +68,10 @@ async def create_task(task: TaskCreateRequest, background_tasks: BackgroundTasks
                 "task": TaskInfo(
                     id=new_task_row.id,
                     keyword=task.keyword,
-                    video_number=task.number # Map db 'number' to 'video_number'
+                    video_number=task.number, # Map db 'number' to 'video_number'
+                    status=new_task_row.status,
+                    summary=new_task_row.summary,
+                    created_at=str(new_task_row.created_at) if new_task_row.created_at else None
                 )
             }
     except exc.SQLAlchemyError as e:
@@ -82,7 +87,7 @@ async def create_task(task: TaskCreateRequest, background_tasks: BackgroundTasks
 async def get_tasks(email: str = Query(..., description="Email of the user whose tasks to retrieve")):
     """Retrieves a list of tasks for the specified user."""
     select_query = text("""
-        SELECT id, keyword, number -- Select the 'number' column from DB
+        SELECT id, keyword, number, status, summary, created_at
         FROM test
         WHERE user_email = :email
         ORDER BY created_at DESC
@@ -92,7 +97,14 @@ async def get_tasks(email: str = Query(..., description="Email of the user whose
             result = conn.execute(select_query, {"email": email})
             # Map database rows to TaskInfo model
             tasks = [
-                TaskInfo(id=row.id, keyword=row.keyword, video_number=row.number)
+                TaskInfo(
+                    id=row.id,
+                    keyword=row.keyword,
+                    video_number=row.number,
+                    status=row.status,
+                    summary=row.summary,
+                    created_at=str(row.created_at) if row.created_at else None
+                )
                 for row in result
             ]
         return {"tasks": tasks}

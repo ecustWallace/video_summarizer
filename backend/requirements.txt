@@ -13,3 +13,4 @@ tqdm
 Jinja2
 python-multipart
 faiss-cpu
+alembic
