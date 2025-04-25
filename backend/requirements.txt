@@ -8,6 +8,7 @@ fastapi
 uvicorn
 google-genai
 google-cloud-bigquery
+google-cloud-pubsub>=2.13.0
 python-dotenv
 tqdm
 Jinja2

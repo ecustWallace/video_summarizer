@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "./auth";
 import TaskPanel from "@/components/TaskPanel";
@@ -16,7 +16,7 @@ interface Task {
 }
 
 interface WebSocketMessage {
-  type: 'progress' | 'summary' | 'error';
+  type: 'progress' | 'summary' | 'error' | 'ping';
   message?: string;
   data?: string;
 }
@@ -33,6 +33,13 @@ export default function Dashboard() {
   const [isPolling, setIsPolling] = useState(true);
   const [socket, setSocket] = useState<WebSocket | null>(null);
   const [progressMessages, setProgressMessages] = useState<string[]>([]);
+  const [pubsubEnabled, setPubsubEnabled] = useState<boolean | null>(null);
+  
+  // 使用useRef来存储重试计数，避免闭包问题
+  const retryCountRef = useRef(0);
+  const maxRetries = 5;
+  const retryDelay = 2000;
+  const connectingRef = useRef(false); // 跟踪连接是否正在进行中
 
   const fetchTasks = async () => {
     if (!email || !isPolling) return;
@@ -59,60 +66,270 @@ export default function Dashboard() {
     }
   };
 
+  // 检查PubSub状态
+  const checkPubSubStatus = async () => {
+    try {
+      const response = await fetch(`${apiUrl}/api/system/pubsub-status`);
+      const data = await response.json();
+      setPubsubEnabled(data.enabled);
+      console.log("PubSub状态:", data.enabled ? "启用" : "禁用");
+    } catch (err) {
+      console.error("无法获取PubSub状态", err);
+      setPubsubEnabled(false);
+    }
+  };
+
   // WebSocket 连接管理
   useEffect(() => {
-    if (!selectedTask || selectedTask.status !== 'In Progress') {
+    let heartbeatInterval: NodeJS.Timeout | null = null;
+    let connectionTimeout: NodeJS.Timeout | null = null;
+
+    const connectWebSocket = () => {
+      // 防止重复连接尝试
+      if (connectingRef.current) {
+        console.log("Connection attempt already in progress, skipping");
+        return;
+      }
+      
+      // 重置连接状态
+      connectingRef.current = true;
+      
+      // 如果没有选中的任务，关闭现有连接
+      if (!selectedTask) {
+        console.log("No task selected, not connecting WebSocket");
+        cleanupWebSocket();
+        connectingRef.current = false;
+        return;
+      }
+
+      // 如果任务不在进行中，关闭现有连接
+      if (selectedTask.status !== 'In Progress') {
+        console.log(`Task status is ${selectedTask.status}, not connecting WebSocket`);
+        cleanupWebSocket();
+        connectingRef.current = false;
+        return;
+      }
+
+      // 清理任何现有的WebSocket连接
+      cleanupWebSocket();
+
+      console.log("Setting up WebSocket connection for task:", selectedTask.id);
+      const wsUrlWithTask = `${wsUrl}/ws/progress/${selectedTask.id}`;
+      console.log("WebSocket URL:", wsUrlWithTask);
+      
+      // 创建新的WebSocket连接
+      const newSocket = new WebSocket(wsUrlWithTask);
+      
+      // 设置一个超时，如果连接在一定时间内没有打开，则重试
+      connectionTimeout = setTimeout(() => {
+        if (newSocket.readyState !== WebSocket.OPEN) {
+          console.log("WebSocket connection timed out, retrying...");
+          newSocket.close();
+          
+          if (retryCountRef.current < maxRetries) {
+            retryCountRef.current++;
+            setProgressMessages(prev => [...prev, `🔄 WebSocket连接超时，正在尝试重新连接 (${retryCountRef.current}/${maxRetries})...`]);
+            
+            // 重置连接状态并延迟重试
+            connectingRef.current = false;
+            setTimeout(connectWebSocket, retryDelay * retryCountRef.current);
+          } else {
+            console.error("Max retry attempts reached. Could not connect WebSocket.");
+            setProgressMessages(prev => [...prev, "❌ 已达到最大重试次数，停止重连。请刷新页面重试。"]);
+            
+            // 启用轮询作为备选方案
+            setIsPolling(true);
+            connectingRef.current = false;
+          }
+        }
+      }, 10000);
+
+      newSocket.onopen = () => {
+        console.log("WebSocket connected for task:", selectedTask.id);
+        if (connectionTimeout) {
+          clearTimeout(connectionTimeout);
+          connectionTimeout = null;
+        }
+        
+        // 仅在任务仍在进行中时设置新的socket
+        if (selectedTask.status === 'In Progress') {
+          setSocket(newSocket);
+          setProgressMessages(prev => [...prev, "▶️ WebSocket连接已建立，正在等待进度更新..."]);
+          retryCountRef.current = 0; // 重置重试计数
+          
+          // 设置心跳检测，每30秒发送一次ping
+          heartbeatInterval = setInterval(() => {
+            if (newSocket.readyState === WebSocket.OPEN) {
+              try {
+                newSocket.send(JSON.stringify({ type: 'ping' }));
+                console.log("Sent ping to keep connection alive");
+              } catch (e) {
+                console.error("Error sending ping:", e);
+                cleanupWebSocket();
+                
+                // 延迟重连
+                connectingRef.current = false;
+                setTimeout(connectWebSocket, retryDelay);
+              }
+            }
+          }, 30000);
+        } else {
+          // 如果任务已不在进行中，立即关闭这个新建立的连接
+          console.log("Task no longer in progress, closing new connection");
+          newSocket.close();
+        }
+        
+        connectingRef.current = false;
+      };
+
+      newSocket.onmessage = (event) => {
+        console.log("Received WebSocket message:", event.data);
+        try {
+          const data: WebSocketMessage = JSON.parse(event.data);
+          console.log("Parsed WebSocket message:", data);
+          
+          if (data.type === 'progress' && data.message) {
+            console.log("Processing progress message:", data.message);
+            setProgressMessages(prev => [...prev, data.message!]);
+          } else if (data.type === 'summary' && data.data) {
+            console.log("Processing summary message:", data.data);
+            setSelectedTask(prev => prev ? { ...prev, status: 'Done', summary: data.data! } : null);
+            setProgressMessages(prev => [...prev, "✅ 摘要已接收。"]);
+            // 任务完成时关闭连接
+            if (newSocket.readyState === WebSocket.OPEN) {
+              newSocket.close();
+            }
+            setSocket(null);
+            if (heartbeatInterval) {
+              clearInterval(heartbeatInterval);
+              heartbeatInterval = null;
+            }
+            if (connectionTimeout) {
+              clearTimeout(connectionTimeout);
+              connectionTimeout = null;
+            }
+          } else if (data.type === 'error' && data.message) {
+            console.log("Processing error message:", data.message);
+            setSelectedTask(prev => prev ? { ...prev, status: 'Failed' } : null);
+            setProgressMessages(prev => [...prev, `❌ 错误: ${data.message}`]);
+            // 任务失败时关闭连接
+            if (newSocket.readyState === WebSocket.OPEN) {
+              newSocket.close();
+            }
+            setSocket(null);
+            if (heartbeatInterval) {
+              clearInterval(heartbeatInterval);
+              heartbeatInterval = null;
+            }
+            if (connectionTimeout) {
+              clearTimeout(connectionTimeout);
+              connectionTimeout = null;
+            }
+          } else if (data.type === 'ping') {
+            console.log("Received ping from server");
+          } else {
+            console.warn("Unknown message type:", data);
+          }
+        } catch (e) {
+          console.error("Failed to parse WebSocket message:", event.data, e);
+        }
+      };
+
+      newSocket.onerror = (error) => {
+        console.error("WebSocket Error:", error);
+        if (connectionTimeout) {
+          clearTimeout(connectionTimeout);
+          connectionTimeout = null;
+        }
+        
+        setProgressMessages(prev => [...prev, "❌ WebSocket连接错误，正在尝试重新连接..."]);
+        cleanupWebSocket();
+        
+        // 自动尝试重新连接
+        if (retryCountRef.current < maxRetries) {
+          retryCountRef.current++;
+          
+          // 重置连接状态并延迟重试
+          connectingRef.current = false;
+          setTimeout(connectWebSocket, retryDelay * retryCountRef.current);
+        } else {
+          setProgressMessages(prev => [...prev, "❌ 已达到最大重试次数，停止重连。切换到轮询模式。"]);
+          
+          // 切换到轮询模式
+          setIsPolling(true);
+          connectingRef.current = false;
+        }
+      };
+
+      newSocket.onclose = (event) => {
+        console.log("WebSocket closed with code:", event.code, "reason:", event.reason);
+        if (connectionTimeout) {
+          clearTimeout(connectionTimeout);
+          connectionTimeout = null;
+        }
+        
+        setSocket(null);
+        if (heartbeatInterval) {
+          clearInterval(heartbeatInterval);
+          heartbeatInterval = null;
+        }
+        
+        // 如果任务仍在进行中且未达到最大重试次数，尝试重新连接
+        if (selectedTask && selectedTask.status === 'In Progress' && retryCountRef.current < maxRetries) {
+          console.log(`Attempting to reconnect (${retryCountRef.current + 1}/${maxRetries})...`);
+          setProgressMessages(prev => [...prev, `🔄 WebSocket连接已关闭，正在尝试重新连接 (${retryCountRef.current + 1}/${maxRetries})...`]);
+          retryCountRef.current++;
+          
+          // 重置连接状态并延迟重试
+          connectingRef.current = false;
+          setTimeout(connectWebSocket, retryDelay * retryCountRef.current);
+        } else if (retryCountRef.current >= maxRetries) {
+          console.error("Max retry attempts reached. Stopping reconnection attempts.");
+          setProgressMessages(prev => [...prev, "❌ 已达到最大重试次数，停止重连。切换到轮询模式。"]);
+          
+          // 启用轮询作为备选方案
+          setIsPolling(true);
+          connectingRef.current = false;
+        } else {
+          // 如果任务不再进行中，则不尝试重连
+          connectingRef.current = false;
+        }
+      };
+    };
+    
+    // 辅助函数，用于清理WebSocket资源
+    const cleanupWebSocket = () => {
       if (socket) {
+        console.log("Closing existing WebSocket connection");
         socket.close();
         setSocket(null);
       }
-      return;
+      
+      if (heartbeatInterval) {
+        clearInterval(heartbeatInterval);
+        heartbeatInterval = null;
+      }
+      
+      if (connectionTimeout) {
+        clearTimeout(connectionTimeout);
+        connectionTimeout = null;
+      }
+    };
+
+    // 只有在任务处于进行中状态时才尝试连接
+    if (selectedTask?.status === 'In Progress') {
+      console.log("Task is in progress, attempting WebSocket connection");
+      retryCountRef.current = 0; // 重置重试计数
+      connectWebSocket();
+    } else {
+      // 确保清理任何现有连接
+      cleanupWebSocket();
     }
 
-    const wsUrlWithTask = `${wsUrl}/ws/progress/${selectedTask.id}`;
-    const newSocket = new WebSocket(wsUrlWithTask);
-    setSocket(newSocket);
-
-    newSocket.onopen = () => {
-      setProgressMessages(["▶️ WebSocket connected. Waiting for progress..."]);
-      console.log("WebSocket connected for task:", selectedTask.id);
-    };
-
-    newSocket.onmessage = (event) => {
-      try {
-        const data: WebSocketMessage = JSON.parse(event.data);
-        if (data.type === 'progress' && data.message) {
-          setProgressMessages(prev => [...prev, data.message!]);
-        } else if (data.type === 'summary' && data.data) {
-          setSelectedTask(prev => prev ? { ...prev, status: 'Done', summary: data.data! } : null);
-          setProgressMessages(prev => [...prev, "✅ Summary received."]);
-          newSocket.close();
-          setSocket(null);
-        } else if (data.type === 'error' && data.message) {
-          setSelectedTask(prev => prev ? { ...prev, status: 'Failed' } : null);
-          setProgressMessages(prev => [...prev, `❌ Error: ${data.message}`]);
-          newSocket.close();
-          setSocket(null);
-        }
-      } catch (e) {
-        console.error("Failed to parse WebSocket message:", e);
-      }
-    };
-
-    newSocket.onerror = (error) => {
-      console.error("WebSocket Error:", error);
-      setProgressMessages(prev => [...prev, "❌ WebSocket connection error."]);
-    };
-
-    newSocket.onclose = () => {
-      console.log("WebSocket closed");
-      setSocket(null);
-    };
-
+    // 清理函数
     return () => {
-      if (newSocket.readyState === WebSocket.OPEN || newSocket.readyState === WebSocket.CONNECTING) {
-        newSocket.close();
-      }
+      cleanupWebSocket();
+      connectingRef.current = false;
     };
   }, [selectedTask?.id, selectedTask?.status]);
 
@@ -127,6 +344,7 @@ export default function Dashboard() {
       });
 
       fetchTasks();
+      checkPubSubStatus(); // 检查PubSub状态
 
       const interval = setInterval(fetchTasks, 2000);
 
@@ -145,7 +363,15 @@ export default function Dashboard() {
   };
 
   const handleSubmit = () => {
-    const taskPayload = skipDownload ? { keyword, number, email, skip_download: true } : { keyword, number, email, skip_download: false };
+    console.log("Submitting task with skip_download:", skipDownload);
+    const taskPayload = {
+      keyword,
+      number,
+      email,
+      skip_download: skipDownload
+    };
+    console.log("Task payload:", taskPayload);
+    
     fetch(`${apiUrl}/api/tasks/create`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -159,66 +385,32 @@ export default function Dashboard() {
       })
       .then((data) => {
         const newTask = data.task;
-        // 1. 先更新任务列表
+        console.log("Task created:", newTask);
+        
+        // 确保任务状态是 In Progress
+        if (newTask.status !== 'In Progress') {
+          console.warn("Task status is not In Progress:", newTask.status);
+          // 强制设置状态为 In Progress
+          newTask.status = 'In Progress';
+        }
+        
+        // 1. 先重置进度消息
+        setProgressMessages([]);
+        
+        // 2. 更新任务列表
         setTasks((prevTasks) => [...prevTasks, newTask]);
         
-        // 2. 重置表单状态
+        // 3. 设置选中的任务
+        setSelectedTask({ ...newTask, user_email: email });
+        
+        // 4. 启用轮询
+        setIsPolling(true);
+        
+        // 5. 重置表单状态
         setShowModal(false);
         setKeyword("");
         setNumber(10);
         setSkipDownload(false);
-        
-        // 3. 重置进度消息
-        setProgressMessages([]);
-        
-        // 4. 设置选中的任务
-        setSelectedTask({ ...newTask, user_email: email });
-        
-        // 5. 启用轮询
-        setIsPolling(true);
-        
-        // 6. 立即建立 WebSocket 连接
-        if (newTask.id) {
-          const wsUrlWithTask = `${wsUrl}/ws/progress/${newTask.id}`;
-          const newSocket = new WebSocket(wsUrlWithTask);
-          setSocket(newSocket);
-          
-          newSocket.onopen = () => {
-            console.log("WebSocket connected for task:", newTask.id);
-            setProgressMessages(["▶️ WebSocket connected. Waiting for progress..."]);
-          };
-          
-          newSocket.onmessage = (event) => {
-            try {
-              const data: WebSocketMessage = JSON.parse(event.data);
-              if (data.type === 'progress' && data.message) {
-                setProgressMessages(prev => [...prev, data.message!]);
-              } else if (data.type === 'summary' && data.data) {
-                setSelectedTask(prev => prev ? { ...prev, status: 'Done', summary: data.data! } : null);
-                setProgressMessages(prev => [...prev, "✅ Summary received."]);
-                newSocket.close();
-                setSocket(null);
-              } else if (data.type === 'error' && data.message) {
-                setSelectedTask(prev => prev ? { ...prev, status: 'Failed' } : null);
-                setProgressMessages(prev => [...prev, `❌ Error: ${data.message}`]);
-                newSocket.close();
-                setSocket(null);
-              }
-            } catch (e) {
-              console.error("Failed to parse WebSocket message:", e);
-            }
-          };
-          
-          newSocket.onerror = (error) => {
-            console.error("WebSocket Error:", error);
-            setProgressMessages(prev => [...prev, "❌ WebSocket connection error."]);
-          };
-          
-          newSocket.onclose = () => {
-            console.log("WebSocket closed");
-            setSocket(null);
-          };
-        }
       })
       .catch((err) => {
         console.error("Failed to create or start task", err);
@@ -245,6 +437,26 @@ export default function Dashboard() {
     setSelectedTask(null);
     setProgressMessages([]);
     setIsPolling(false);
+  };
+
+  // 处理任务状态更新
+  const handleTaskUpdate = (updatedTask: Task) => {
+    console.log("Dashboard received task update:", updatedTask);
+    
+    // 更新任务列表中的任务
+    setTasks(prevTasks => 
+      prevTasks.map(task => 
+        task.id === updatedTask.id ? updatedTask : task
+      )
+    );
+    
+    // 更新当前选中的任务
+    setSelectedTask(updatedTask);
+    
+    // 如果任务已完成或失败，停止轮询
+    if (updatedTask.status === 'Done' || updatedTask.status === 'Failed') {
+      setIsPolling(false);
+    }
   };
 
   return (
@@ -293,6 +505,11 @@ export default function Dashboard() {
         </div>
 
         <div>
+          {pubsubEnabled !== null && (
+            <div className={`mb-3 px-3 py-2 rounded text-center text-sm ${pubsubEnabled ? 'bg-green-600' : 'bg-red-600'}`}>
+              PubSub状态: {pubsubEnabled ? '启用' : '禁用'}
+            </div>
+          )}
           <button
             onClick={handleBack}
             className="bg-gray-600 hover:bg-gray-700 text-white font-semibold py-2 px-4 rounded w-full mb-2"
@@ -314,7 +531,6 @@ export default function Dashboard() {
             task={selectedTask} 
             onBack={handleBack}
             progressMessages={progressMessages}
-            setProgressMessages={setProgressMessages}
           />
         ) : (
           <div className="text-center">

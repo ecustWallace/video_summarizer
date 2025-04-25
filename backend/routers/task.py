@@ -30,11 +30,12 @@ class TaskInfo(BaseModel):
 @router.post("/api/tasks/create", status_code=201) # Use 201 Created status code
 async def create_task(task: TaskCreateRequest, background_tasks: BackgroundTasks):
     """Creates a new task in the database."""
+    print(f"[Task] Creating task with skip_download: {task.skip_download}")
     insert_query = text("""
         INSERT INTO test (user_email, keyword, number)
         VALUES (:email, :keyword, :number)
         RETURNING id, keyword, number, user_email, status, summary, created_at
-    """) # Also return user_email if needed later, though not strictly required by the response model
+    """)
     try:
         with engine.connect() as conn:
             result = conn.execute(
@@ -45,37 +46,35 @@ async def create_task(task: TaskCreateRequest, background_tasks: BackgroundTasks
                     "number": task.number
                 }
             )
-            conn.commit() # Commit the transaction
+            conn.commit()
             new_task_row = result.fetchone()
             if new_task_row is None:
                 raise HTTPException(status_code=500, detail="Failed to create task.")
                 
+            print(f"[Task] Task created with ID: {new_task_row.id}")
             # --- Schedule the summarize_videos function ---
-            # Pass necessary arguments to your summarize_videos function.
-            # Make sure summarize_videos accepts these arguments.
             background_tasks.add_task(
                 summarize_videos,
-                task_id=new_task_row.id,          # Pass the newly created task ID
-                user_email=task.email, # Or task.email, depending on what summarize needs
-                keyword=task.keyword,      # Or task.keyword
-                video_number=task.number,  # Or task.number
-                skip_download=task.skip_download # Pass skip_download if summarize needs it
-                # Add any other arguments your summarize_videos function requires
+                task_id=new_task_row.id,
+                user_email=task.email,
+                keyword=task.keyword,
+                video_number=task.number,
+                skip_download=task.skip_download
             )
+            print(f"[Task] Background task scheduled for task {new_task_row.id}")
 
-            # Map database columns to the conceptual TaskInfo model
             return {
                 "task": TaskInfo(
                     id=new_task_row.id,
                     keyword=task.keyword,
-                    video_number=task.number, # Map db 'number' to 'video_number'
+                    video_number=task.number,
                     status=new_task_row.status,
                     summary=new_task_row.summary,
                     created_at=str(new_task_row.created_at) if new_task_row.created_at else None
                 )
             }
     except exc.SQLAlchemyError as e:
-        logger.error(f"Database error creating task: {e}", exc_info=True) # Log the error
+        logger.error(f"Database error creating task: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Database error occurred.")
     except Exception as e:
         logger.error(f"Unexpected error creating task: {e}", exc_info=True)

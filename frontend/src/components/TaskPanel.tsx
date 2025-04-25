@@ -1,13 +1,12 @@
 import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { wsUrl } from "../config";
 
 interface Task {
-  id?: number; // ID is crucial now
+  id?: number;
   keyword: string;
   video_number?: number;
   skip_download?: boolean;
-  user_email?: string; // Keep user_email if needed elsewhere, though maybe not for WS connection
+  user_email?: string;
   status?: string;
   summary?: string | null;
   created_at?: string | null;
@@ -17,35 +16,13 @@ interface TaskPanelProps {
   task: Task;
   onBack: () => void;
   progressMessages: string[];
-  setProgressMessages: (messages: string[] | ((prev: string[]) => string[])) => void;
 }
 
-// Define structure for WebSocket messages (align with backend)
-interface ProgressMessage {
-    type: 'progress';
-    message: string;
-}
-
-interface SummaryMessage {
-    type: 'summary';
-    data: string;
-}
-
-interface ErrorMessage {
-    type: 'error';
-    message: string;
-}
-
-type WebSocketMessage = ProgressMessage | SummaryMessage | ErrorMessage;
-
-export default function TaskPanel({ task, onBack, progressMessages, setProgressMessages }: TaskPanelProps) {
+export default function TaskPanel({ task, onBack, progressMessages }: TaskPanelProps) {
   const [summary, setSummary] = useState<string | null>(task.summary || null);
   const [status, setStatus] = useState<string>(task.status || 'In Progress');
   const [loading, setLoading] = useState(task.status === 'In Progress');
-  const [error, setError] = useState<string | null>(null); // Optional: state for specific error msg
-  const [socket, setSocket] = useState<WebSocket | null>(null);
-  const [retryCount, setRetryCount] = useState(0);
-  const maxRetries = 3;
+  const [error, setError] = useState<string | null>(null);
 
   // 当任务属性更新时，更新本地状态
   useEffect(() => {
@@ -62,118 +39,6 @@ export default function TaskPanel({ task, onBack, progressMessages, setProgressM
       }
     }
   }, [task?.status, task?.summary, status, summary]);
-
-  // WebSocket 连接管理
-  useEffect(() => {
-    // 如果没有任务ID，不建立连接
-    if (!task || typeof task.id === 'undefined') {
-      setLoading(false);
-      return;
-    }
-
-    // 如果任务已完成或失败，不建立连接
-    if (task.status === 'Done' || task.status === 'Failed') {
-      setLoading(false);
-      return;
-    }
-
-    // 如果任务进行中，建立 WebSocket 连接
-    if (task.status === 'In Progress') {
-      const connectWebSocket = () => {
-        const wsUrlWithTask = `${wsUrl}/ws/progress/${task.id}`;
-        const newSocket = new WebSocket(wsUrlWithTask);
-        setSocket(newSocket);
-
-        newSocket.onopen = () => {
-          console.log("WebSocket connected for task:", task.id);
-          setProgressMessages((prev) => [...prev, "▶️ WebSocket connected. Waiting for progress..."]);
-          setRetryCount(0); // 重置重试计数
-        };
-
-        newSocket.onmessage = (event) => {
-          try {
-            const receivedData: WebSocketMessage = JSON.parse(event.data);
-
-            if (receivedData.type === 'progress') {
-              setProgressMessages((prev) => [...prev, receivedData.message]);
-            } else if (receivedData.type === 'summary') {
-              // 先更新进度消息
-              setProgressMessages((prev) => [...prev, "✅ Summary received."]);
-              // 然后更新状态
-              setStatus('Done');
-              setSummary(receivedData.data);
-              setLoading(false);
-              // 最后关闭连接
-              newSocket.close();
-              setSocket(null);
-            } else if (receivedData.type === 'error') {
-              // 先更新进度消息
-              setProgressMessages((prev) => [...prev, `❌ Error: ${receivedData.message}`]);
-              // 然后更新状态
-              setError(receivedData.message);
-              setStatus('Failed');
-              setLoading(false);
-              // 最后关闭连接
-              newSocket.close();
-              setSocket(null);
-            } else {
-              console.warn("Received unknown WebSocket message type:", receivedData);
-              setProgressMessages((prev) => [...prev, `[Unknown message]: ${event.data}`]);
-            }
-          } catch (e) {
-            console.error("Failed to parse WebSocket message:", event.data, e);
-            setProgressMessages((prev) => [...prev, `[Raw]: ${event.data}`]);
-          }
-        };
-
-        newSocket.onerror = (error) => {
-          console.error("WebSocket Error:", error);
-          if (retryCount < maxRetries) {
-            setRetryCount(prev => prev + 1);
-            setProgressMessages(prev => [...prev, `⚠️ Connection error. Retrying (${retryCount + 1}/${maxRetries})...`]);
-          } else {
-            setError("WebSocket connection error after multiple retries.");
-            setStatus('Failed');
-            setProgressMessages(prev => [...prev, "❌ WebSocket connection failed after multiple retries."]);
-            setLoading(false);
-            newSocket.close();
-            setSocket(null);
-          }
-        };
-
-        newSocket.onclose = (event) => {
-          console.log("WebSocket closed:", event.reason);
-          if (loading && !summary && !error) {
-            if (retryCount < maxRetries) {
-              setRetryCount(prev => prev + 1);
-              setProgressMessages(prev => [...prev, `⚠️ Connection closed. Retrying (${retryCount + 1}/${maxRetries})...`]);
-              // 尝试重新连接
-              setTimeout(connectWebSocket, 2000);
-            } else {
-              setProgressMessages(prev => [...prev, "⏹️ WebSocket closed unexpectedly."]);
-              setError("Connection closed before task completion.");
-              setStatus('Failed');
-              setLoading(false);
-            }
-          }
-          setSocket(null);
-        };
-      };
-
-      // 重置状态
-      setProgressMessages([]);
-      setError(null);
-      setRetryCount(0);
-      connectWebSocket();
-
-      // 清理函数
-      return () => {
-        if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
-          socket.close();
-        }
-      };
-    }
-  }, [task?.id, task?.status]);
 
   return (
     <div className="p-4">
