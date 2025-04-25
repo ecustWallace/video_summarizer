@@ -52,22 +52,21 @@ async def send_progress(task_id: int, message_type: str, data: any):
     connected for a specific task_id.
     """
     if task_id in task_connections:
-        message_str = {"type": message_type, "message": data if message_type != 'summary' else None,
-                       "data": data if message_type == 'summary' else None}
-        import json  # Make sure to import json
-        message_json = json.dumps(
-            {k: v for k, v in message_str.items() if v is not None})  # Remove None values before sending
-
+        message = {
+            "type": message_type,
+            "message": data if message_type == 'progress' else None,
+            "data": data if message_type == 'summary' else None
+        }
+        
+        # 移除 None 值
+        message = {k: v for k, v in message.items() if v is not None}
+        
         disconnected_clients = []
-        # 使用 list(task_connections[task_id]) 创建副本进行迭代，以防在迭代期间列表被修改
         for client in list(task_connections[task_id]):
             try:
-                await client.send_json(message_json)  # 使用 send_json 发送 JSON 格式
-                # 或者如果你确定前端总是能处理字符串:
-                # await client.send_text(message_json)
+                await client.send_json(message)
             except Exception as e:
                 print(f"Failed to send to client for task {task_id}: {e}. Marking for removal.")
-                # 标记稍后移除，直接在循环中移除可能导致问题
                 disconnected_clients.append(client)
 
         # 清理断开连接的客户端
@@ -80,7 +79,6 @@ async def send_progress(task_id: int, message_type: str, data: any):
         if task_id in task_connections and not task_connections[task_id]:
             del task_connections[task_id]
             print(f"No more clients for task {task_id} after send, removed entry.")
-
     else:
         print(f"No clients connected for task_id {task_id} to send progress.")
 

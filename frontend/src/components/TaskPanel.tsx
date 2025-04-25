@@ -1,4 +1,6 @@
 import { useEffect, useState } from "react";
+import { motion, AnimatePresence } from "framer-motion";
+import { wsUrl } from "../config";
 
 interface Task {
   id?: number; // ID is crucial now
@@ -14,6 +16,8 @@ interface Task {
 interface TaskPanelProps {
   task: Task;
   onBack: () => void;
+  progressMessages: string[];
+  setProgressMessages: (messages: string[] | ((prev: string[]) => string[])) => void;
 }
 
 // Define structure for WebSocket messages (align with backend)
@@ -34,135 +38,265 @@ interface ErrorMessage {
 
 type WebSocketMessage = ProgressMessage | SummaryMessage | ErrorMessage;
 
-export default function TaskPanel({ task, onBack }: TaskPanelProps) {
-  const [progressMessages, setProgressMessages] = useState<string[]>([]);
+export default function TaskPanel({ task, onBack, progressMessages, setProgressMessages }: TaskPanelProps) {
   const [summary, setSummary] = useState<string | null>(task.summary || null);
   const [status, setStatus] = useState<string>(task.status || 'In Progress');
   const [loading, setLoading] = useState(task.status === 'In Progress');
   const [error, setError] = useState<string | null>(null); // Optional: state for specific error msg
+  const [socket, setSocket] = useState<WebSocket | null>(null);
+  const [retryCount, setRetryCount] = useState(0);
+  const maxRetries = 3;
 
+  // 当任务属性更新时，更新本地状态
   useEffect(() => {
-    // Only proceed if we have a task with an ID
+    if (task) {
+      // 如果任务状态发生变化，立即更新本地状态
+      if (task.status !== status) {
+        setStatus(task.status || 'In Progress');
+        setLoading(task.status === 'In Progress');
+      }
+      
+      // 如果任务摘要发生变化，立即更新本地状态
+      if (task.summary !== summary) {
+        setSummary(task.summary || null);
+      }
+    }
+  }, [task?.status, task?.summary, status, summary]);
+
+  // WebSocket 连接管理
+  useEffect(() => {
+    // 如果没有任务ID，不建立连接
     if (!task || typeof task.id === 'undefined') {
-        setLoading(false);
-        return;
+      setLoading(false);
+      return;
     }
 
-    // Reset state when task changes
-    setProgressMessages([]);
-    setSummary(task.summary || null);
-    setStatus(task.status || 'In Progress');
-    setError(null);
-    setLoading(task.status === 'In Progress');
+    // 如果任务已完成或失败，不建立连接
+    if (task.status === 'Done' || task.status === 'Failed') {
+      setLoading(false);
+      return;
+    }
 
-    // Only connect to WebSocket if task is in progress
+    // 如果任务进行中，建立 WebSocket 连接
     if (task.status === 'In Progress') {
-        const wsUrl = `wss://backend-468274160217.us-central1.run.app/ws/progress/${task.id}`;
-        const socket = new WebSocket(wsUrl);
+      const connectWebSocket = () => {
+        const wsUrlWithTask = `${wsUrl}/ws/progress/${task.id}`;
+        const newSocket = new WebSocket(wsUrlWithTask);
+        setSocket(newSocket);
 
-        socket.onopen = () => {
-            console.log("WebSocket connected for task:", task.id);
-            setProgressMessages((prev) => [...prev, "▶️ WebSocket connected. Waiting for progress..."]);
+        newSocket.onopen = () => {
+          console.log("WebSocket connected for task:", task.id);
+          setProgressMessages((prev) => [...prev, "▶️ WebSocket connected. Waiting for progress..."]);
+          setRetryCount(0); // 重置重试计数
         };
 
-        socket.onmessage = (event) => {
-            try {
-                const receivedData: WebSocketMessage = JSON.parse(event.data);
+        newSocket.onmessage = (event) => {
+          try {
+            const receivedData: WebSocketMessage = JSON.parse(event.data);
 
-                if (receivedData.type === 'progress') {
-                    setProgressMessages((prev) => [...prev, receivedData.message]);
-                } else if (receivedData.type === 'summary') {
-                    setSummary(receivedData.data);
-                    setStatus('Done');
-                    setProgressMessages((prev) => [...prev, "✅ Summary received."]);
-                    setLoading(false);
-                    socket.close();
-                } else if (receivedData.type === 'error') {
-                    setError(receivedData.message);
-                    setStatus('Failed');
-                    setProgressMessages((prev) => [...prev, `❌ Error: ${receivedData.message}`]);
-                    setLoading(false);
-                    socket.close();
-                } else {
-                    console.warn("Received unknown WebSocket message type:", receivedData);
-                    setProgressMessages((prev) => [...prev, `[Unknown message]: ${event.data}`]);
-                }
-            } catch (e) {
-                console.error("Failed to parse WebSocket message:", event.data, e);
-                setProgressMessages((prev) => [...prev, `[Raw]: ${event.data}`]);
+            if (receivedData.type === 'progress') {
+              setProgressMessages((prev) => [...prev, receivedData.message]);
+            } else if (receivedData.type === 'summary') {
+              // 先更新进度消息
+              setProgressMessages((prev) => [...prev, "✅ Summary received."]);
+              // 然后更新状态
+              setStatus('Done');
+              setSummary(receivedData.data);
+              setLoading(false);
+              // 最后关闭连接
+              newSocket.close();
+              setSocket(null);
+            } else if (receivedData.type === 'error') {
+              // 先更新进度消息
+              setProgressMessages((prev) => [...prev, `❌ Error: ${receivedData.message}`]);
+              // 然后更新状态
+              setError(receivedData.message);
+              setStatus('Failed');
+              setLoading(false);
+              // 最后关闭连接
+              newSocket.close();
+              setSocket(null);
+            } else {
+              console.warn("Received unknown WebSocket message type:", receivedData);
+              setProgressMessages((prev) => [...prev, `[Unknown message]: ${event.data}`]);
             }
+          } catch (e) {
+            console.error("Failed to parse WebSocket message:", event.data, e);
+            setProgressMessages((prev) => [...prev, `[Raw]: ${event.data}`]);
+          }
         };
 
-        socket.onerror = (error) => {
-            console.error("WebSocket Error:", error);
-            setError("WebSocket connection error.");
+        newSocket.onerror = (error) => {
+          console.error("WebSocket Error:", error);
+          if (retryCount < maxRetries) {
+            setRetryCount(prev => prev + 1);
+            setProgressMessages(prev => [...prev, `⚠️ Connection error. Retrying (${retryCount + 1}/${maxRetries})...`]);
+          } else {
+            setError("WebSocket connection error after multiple retries.");
             setStatus('Failed');
-            setProgressMessages((prev) => [...prev, "❌ WebSocket connection error."]);
+            setProgressMessages(prev => [...prev, "❌ WebSocket connection failed after multiple retries."]);
             setLoading(false);
+            newSocket.close();
+            setSocket(null);
+          }
         };
 
-        socket.onclose = (event) => {
-            console.log("WebSocket closed:", event.reason);
-            if (loading && !summary && !error) {
-                setProgressMessages((prev) => [...prev, "⏹️ WebSocket closed unexpectedly."]);
-                setError("Connection closed before task completion.");
-                setStatus('Failed');
-                setLoading(false);
+        newSocket.onclose = (event) => {
+          console.log("WebSocket closed:", event.reason);
+          if (loading && !summary && !error) {
+            if (retryCount < maxRetries) {
+              setRetryCount(prev => prev + 1);
+              setProgressMessages(prev => [...prev, `⚠️ Connection closed. Retrying (${retryCount + 1}/${maxRetries})...`]);
+              // 尝试重新连接
+              setTimeout(connectWebSocket, 2000);
+            } else {
+              setProgressMessages(prev => [...prev, "⏹️ WebSocket closed unexpectedly."]);
+              setError("Connection closed before task completion.");
+              setStatus('Failed');
+              setLoading(false);
             }
+          }
+          setSocket(null);
         };
+      };
 
-        return () => {
-            if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
-                socket.close();
-            }
-        };
+      // 重置状态
+      setProgressMessages([]);
+      setError(null);
+      setRetryCount(0);
+      connectWebSocket();
+
+      // 清理函数
+      return () => {
+        if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
+          socket.close();
+        }
+      };
     }
-  }, [task?.id, task?.status, task?.summary]);
+  }, [task?.id, task?.status]);
 
   return (
     <div className="p-4">
-      <button onClick={onBack} className="text-blue-500 underline mb-4">
-        ← Back to Task List
-      </button>
+      <motion.button
+        onClick={onBack}
+        className="text-blue-500 hover:text-blue-400 transition-colors duration-200 flex items-center mb-4"
+        whileHover={{ x: -5 }}
+        whileTap={{ scale: 0.95 }}
+      >
+        <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+        </svg>
+        Back to Task List
+      </motion.button>
 
       {task ? (
-        <>
-          <h2 className="text-xl font-bold mb-2">Task: {task.keyword} (#{task.id})</h2>
-          <div className="mb-4">
-            <span className={`inline-block px-3 py-1 rounded-full text-sm ${
-              status === 'Done' ? 'bg-green-500' :
-              status === 'Failed' ? 'bg-red-500' :
-              'bg-yellow-500'
-            }`}>
-              {status}
-            </span>
-            {task.created_at && (
-              <span className="ml-4 text-gray-400">
-                Created: {new Date(task.created_at).toLocaleString()}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.5 }}
+        >
+          <div className="flex items-center justify-between mb-6">
+            <h2 className="text-2xl font-bold bg-gradient-to-r from-blue-400 to-purple-500 bg-clip-text text-transparent">
+              {task.keyword}
+            </h2>
+            <div className="flex items-center space-x-4">
+              <span className={`px-3 py-1 rounded-full text-sm font-medium ${
+                status === 'Done' ? 'bg-green-500 text-white' :
+                status === 'Failed' ? 'bg-red-500 text-white' :
+                'bg-yellow-500 text-white'
+              }`}>
+                {status}
               </span>
-            )}
+              {task.created_at && (
+                <span className="text-gray-400 text-sm">
+                  {new Date(task.created_at).toLocaleString()}
+                </span>
+              )}
+            </div>
           </div>
           
-          <div className="bg-gray-900 rounded p-4 mb-4 max-h-60 overflow-y-scroll text-sm">
-            {progressMessages.map((msg, idx) => (
-              <div key={idx}>{msg}</div>
-            ))}
-            {/* Keep loading indicator while task is running */}
-            {loading && <div>⏳ Processing task...</div>}
-            {error && !loading && <div className="text-red-500">⚠️ Task failed: {error}</div>}
-          </div>
+          <AnimatePresence>
+            {loading && (
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="bg-gray-900 rounded-lg p-4 mb-6 max-h-60 overflow-y-auto"
+              >
+                <div className="space-y-2">
+                  {progressMessages.map((msg, idx) => (
+                    <motion.div
+                      key={idx}
+                      initial={{ opacity: 0, x: -20 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      transition={{ delay: idx * 0.1 }}
+                      className="text-sm text-gray-300"
+                    >
+                      {msg}
+                    </motion.div>
+                  ))}
+                </div>
+                <div className="mt-4 flex items-center text-blue-400">
+                  <svg className="animate-spin h-5 w-5 mr-2" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                  </svg>
+                  Processing task...
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
 
-          {summary && !loading && (
-            <div className="bg-white text-black p-4 rounded shadow">
-              <h3 className="font-semibold mb-2">✅ Final Summary</h3>
-              <p>{summary}</p>
-            </div>
+          {error && !loading && (
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative mb-6"
+              role="alert"
+            >
+              <strong className="font-bold">Error: </strong>
+              <span className="block sm:inline">{error}</span>
+            </motion.div>
           )}
-        </>
-       ) : (
-         <div>No task selected or task data is missing.</div>
-       )
-      }
+
+          <AnimatePresence>
+            {summary && !loading && (
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -20 }}
+                className="bg-white rounded-lg shadow-xl overflow-hidden"
+              >
+                <div className="bg-gradient-to-r from-blue-500 to-purple-500 px-6 py-4">
+                  <h3 className="text-xl font-semibold text-white flex items-center">
+                    <svg className="w-6 h-6 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    Final Summary
+                  </h3>
+                </div>
+                <div className="p-6">
+                  <div className="prose prose-lg max-w-none">
+                    {summary.split('\n').map((paragraph, idx) => (
+                      <motion.p
+                        key={idx}
+                        initial={{ opacity: 0, y: 20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ delay: idx * 0.1 }}
+                        className="mb-4 text-gray-700 leading-relaxed"
+                      >
+                        {paragraph}
+                      </motion.p>
+                    ))}
+                  </div>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </motion.div>
+      ) : (
+        <div className="text-center text-gray-500">No task selected or task data is missing.</div>
+      )}
     </div>
   );
 }
