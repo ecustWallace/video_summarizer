@@ -1,56 +1,91 @@
 from fastapi import APIRouter, HTTPException
-from core import pubsub
-from pydantic import BaseModel
 import os
+from typing import Dict, Any
+import logging
+from core.pubsub import pubsub_enabled, PROJECT_ID, TOPIC_PATH
+from core.config import Config
+from google.api_core.exceptions import GoogleAPIError
+from google.cloud import pubsub_v1
+import json
 
-router = APIRouter(
-    prefix="/api/system",
-    tags=["system"],
-)
+# 配置日志
+logger = logging.getLogger('app.system')
 
-class PubSubStatus(BaseModel):
-    enabled: bool
-    project_id: str = ""
-    topic_path: str = ""
-    error_info: str = ""
+router = APIRouter(prefix="/system", tags=["system"])
 
-@router.get("/pubsub-status", response_model=PubSubStatus)
-async def get_pubsub_status():
+@router.get("/pubsub-status")
+async def get_pubsub_status() -> Dict[str, Any]:
     """
-    获取PubSub服务的当前状态
+    获取PubSub连接状态和诊断信息
+    """
+    logger.info("Retrieving PubSub status")
     
-    Returns:
-        PubSubStatus: 一个包含PubSub启用状态的对象
+    # 收集环境信息
+    env_info = {
+        "PROJECT_ID": Config.PROJECT_ID,
+        "CONFIG_PROJECT_ID": Config.PROJECT_ID,  # 配置中的项目ID
+        "ENV_PROJECT_ID": os.getenv("GCP_PROJECT_ID", "Not set"),  # 环境变量中的项目ID
+        "PUBSUB_TOPIC_PATH": Config.PUBSUB_TOPIC_PATH,
+        "PUBSUB_TOPIC_ID": Config.PUBSUB_TOPIC_ID,
+        "PUBSUB_ENABLED_FLAG": pubsub_enabled
+    }
+    
+    # 诊断信息
+    diagnostics = {
+        "env_info": env_info,
+        "config_values": {k: v for k, v in Config.__dict__.items() 
+                         if not k.startswith('_') and isinstance(v, (str, int, bool, float))},
+    }
+    
+    # 尝试执行额外的连接测试
+    connection_test = {}
+    if pubsub_enabled:
+        try:
+            publisher = pubsub_v1.PublisherClient()
+            topic = publisher.get_topic(request={"topic": TOPIC_PATH})
+            connection_test["live_connection_test"] = "success"
+            connection_test["topic_info"] = {
+                "name": topic.name,
+                "labels": dict(topic.labels)
+            }
+        except GoogleAPIError as e:
+            connection_test["live_connection_test"] = "failed"
+            connection_test["error"] = str(e)
+    else:
+        connection_test["live_connection_test"] = "skipped"
+        connection_test["reason"] = "PubSub is disabled"
+    
+    result = {
+        "enabled": pubsub_enabled,
+        "project_id": PROJECT_ID,
+        "topic_path": TOPIC_PATH,
+        "diagnostics": diagnostics,
+        "connection_test": connection_test
+    }
+    
+    logger.info(f"PubSub status: {json.dumps(result, indent=2)}")
+    return result
+    
+@router.get("/config")
+async def get_config() -> Dict[str, Any]:
     """
-    try:
-        # 从core.pubsub模块获取pubsub_enabled标志
-        status = pubsub.pubsub_enabled
-        project_id = os.getenv("GCP_PROJECT_ID", "未设置")
-        
-        response = {
-            "enabled": status,
-            "project_id": project_id,
-            "topic_path": pubsub.TOPIC_PATH,
-            "error_info": "" if status else "PubSub初始化失败，请检查日志"
-        }
-        
-        # 尝试测试PubSub连接
-        if status:
-            try:
-                # 发送一个测试消息到系统通知主题
-                test_result = pubsub.publish_message(0, "system", "PubSub status check")
-                if not test_result:
-                    response["error_info"] = "PubSub发布测试消息失败"
-            except Exception as e:
-                response["error_info"] = f"PubSub测试失败: {str(e)}"
-        
-        return response
-    except Exception as e:
-        print(f"[API] Error checking PubSub status: {e}")
-        # 出错时返回详细信息
-        return {
-            "enabled": False,
-            "project_id": os.getenv("GCP_PROJECT_ID", "未设置"),
-            "topic_path": getattr(pubsub, "TOPIC_PATH", "未知"),
-            "error_info": f"检查PubSub状态时出错: {str(e)}"
-        } 
+    获取当前应用配置（去除敏感信息）
+    """
+    logger.info("Retrieving system configuration")
+    
+    # 使用Config类提供的方法获取安全的配置信息
+    safe_config = Config.get_all_config()
+    
+    # 移除可能的API密钥信息
+    if "HAS_TIKAPI_KEY" in safe_config:
+        safe_config["HAS_TIKAPI_KEY"] = bool(safe_config["HAS_TIKAPI_KEY"])
+    if "HAS_GEMINI_KEY" in safe_config:
+        safe_config["HAS_GEMINI_KEY"] = bool(safe_config["HAS_GEMINI_KEY"])
+    if "HAS_OPENAI_API_KEY" in safe_config:
+        safe_config["HAS_OPENAI_API_KEY"] = bool(safe_config["HAS_OPENAI_API_KEY"])
+    
+    # 返回配置以及环境信息
+    return {
+        "config": safe_config,
+        "debug_mode": Config.DEBUG
+    } 
