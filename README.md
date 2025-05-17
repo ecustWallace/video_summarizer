@@ -144,7 +144,8 @@ Once deployed, **Google Cloud Run** will provide a **public URL** for the web ap
 5️⃣ **Summarize Key Topics** – Uses **Gemini AI** to generate a final summary.\
 6️⃣ **Delete Processed Videos** – Deletes each video after processing to optimize storage.\
 7️⃣ **Evaluate summary accuracy** - Tell how good the final summary is. \
-8️⃣ **Display Final Summary** – Renders the final analysis as Markdown in the Web UI.
+8️⃣ **Display Final Summary** – Renders the final analysis as Markdown in the Web UI.\
+
 ---
 
 ## Screenshots
